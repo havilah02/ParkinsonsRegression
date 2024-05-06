@@ -1,0 +1,422 @@
+url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/parkinsons/telemonitoring/parkinsons_updrs.data"
+
+# Read the dataset into a data frame
+data <- read.csv(url, header = TRUE)
+
+# Display the first few rows of the dataset
+head(data)
+
+# removing the subject column
+data <- subset(data, select = -subject.)
+summary(data)
+
+# rechecking the time since recruitment
+data$test_time <- ifelse(data$test_time <0, 0, data$test_time)
+summary(data$test_time)
+
+library(ggplot2)
+
+# Create a histogram
+hist_plot <- ggplot(data, aes(x = total_UPDRS)) +
+  geom_histogram(binwidth = 5, fill = "red", color = "black", aes(y = ..density..)) +
+  labs(title = "Histogram of Total UPDRS Scores",
+       x = "Total UPDRS",
+       y = "Density")
+
+# Calculate mean and standard deviation
+mean_total_UPDRS <- mean(data$total_UPDRS)
+sd_total_UPDRS <- sd(data$total_UPDRS)
+
+# Add a normal curve overlay
+hist_plot + 
+  stat_function(fun = dnorm, args = list(mean = mean_total_UPDRS, sd = sd_total_UPDRS), color = "black", linewidth = 1) +
+  theme_minimal()
+
+# assessing whether the data in the total_UPDRS column follows a normal distribution
+# Subsample 500 observations for the Shapiro-Wilk test
+subsample <- sample(data$total_UPDRS, 500)
+shapiro.test(subsample)
+
+# performing KS test
+ks.test(data$total_UPDRS, "pnorm", mean = mean(data$total_UPDRS), sd = sd(data$total_UPDRS))
+
+ Detect outliers using Tukey's method
+detect_outliers <- function(column, max_display = 5) {
+  q <- quantile(column, c(0.25, 0.75))
+  iqr <- q[2] - q[1]
+  lower_bound <- q[1] - 1.5 * iqr
+  upper_bound <- q[2] + 1.5 * iqr
+  
+  outliers <- column[column < lower_bound | column > upper_bound]
+  
+  cat("Number of outliers:", length(outliers), "\n")
+  
+  if (length(outliers) > 0) {
+    cat("Outliers (first", max_display, "):", outliers[1:max_display], "\n")
+    
+    if (length(outliers) > max_display) {
+      cat("...", "\n")
+    }
+  } else {
+    cat("No outliers found.\n")
+  }
+}
+
+# Apply the function to each biometric column
+for (col_name in names(data)[2:ncol(data)]) {
+  cat("Outliers in column", col_name, ":\n")
+  detect_outliers(data[[col_name]])
+  cat("\n")
+}
+
+# Create Q-Q plots for numeric columns with diagonal line
+for (col_name in names(data)[2:ncol(data)]) {
+  qq_plot <- ggplot(data, aes(sample = data[[col_name]])) +
+    stat_qq() +
+    geom_abline(intercept = mean(data[[col_name]]), slope = sd(data[[col_name]]), color = "red", linetype = "dashed") +
+    labs(title = paste("Q-Q Plot for", col_name))
+  print(qq_plot)
+}
+
+# Select columns to apply log transformation
+columns_to_transform <- c("Jitter...", "Jitter.Abs.", "Jitter.RAP", "Jitter.PPQ5", "Jitter.DDP", "Shimmer", "Shimmer.dB.", "Shimmer.APQ3", "Shimmer.APQ5", "Shimmer.APQ11", "Shimmer.DDA", "NHR", "HNR", "RPDE", "PPE")
+
+# Apply log transformation to selected columns
+data_log_transformed <- data
+data_log_transformed[columns_to_transform] <- log1p(data_log_transformed[columns_to_transform])
+
+summary(data_log_transformed)
+
+correlation_age <- cor(data_log_transformed$age, data_log_transformed$total_UPDRS)
+cat("Correlation between age and total_UPDRS:", correlation_age, "\n")
+
+scatter_age <- ggplot(data, aes(x = age, y = total_UPDRS)) +
+  geom_point() +
+  labs(title = "Scatter Plot: Age vs total_UPDRS")
+
+print(scatter_age)
+
+boxplot(data_log_transformed$total_UPDRS ~ data_log_transformed$sex, main = "UPDRS by Gender", xlab = "Sex", ylab = "total_UPDRS")
+
+library(ggplot2)
+
+# line plot with individual lines
+ggplot(data_log_transformed, aes(x = test_time, y = total_UPDRS, group = as.factor(age), color = as.factor(age))) +
+  geom_line() +
+  labs(title = "Total UPDRS Over Time",
+       x = "Test Time",
+       y = "Total UPDRS")
+
+
+# standarization
+data_log_transformed[3:21] <- scale(data_log_transformed[3:21])
+summary(data_log_transformed)
+
+library(car)
+
+model <- lm(total_UPDRS ~ ., data = data_log_transformed)
+vif_values <- car::vif(model)
+print(vif_values)
+
+library(caret)
+# identify highly correlated variables
+cor_matrix <- cor(data_log_transformed)
+high_correlation <- findCorrelation(cor_matrix, cutoff = 0.8)
+
+# remove highly correlated variables
+data_reduced <- data_log_transformed[, -high_correlation]
+
+# re-run the model and VIF analysis on the reduced dataset
+model_reduced <- lm(total_UPDRS ~ ., data = data_reduced)
+vif_values_reduced <- car::vif(model_reduced)
+print(vif_values_reduced)
+
+set.seed(123)
+
+# columns where i want to introduce missing values
+columns_to_introduce_NA <- c("test_time", "RPDE", "DFA")
+
+# proportion of missing values
+proportion_missing <- 0.01
+
+# calculating the number of missing values
+num_missing_values <- round(nrow(data_reduced) * length(columns_to_introduce_NA) * proportion_missing)
+
+# sampling the indices for missing values in the specified columns
+missing_indices <- sample(length(data_reduced[[columns_to_introduce_NA[1]]]), num_missing_values)
+
+# introducing missing values only in the specified columns
+data_reduced_with_NA <- data_reduced
+data_reduced_with_NA[missing_indices, columns_to_introduce_NA] <- NA
+
+# Check the number of missing values in the specified columns
+sum(is.na(data_reduced_with_NA[, columns_to_introduce_NA]))
+
+
+summary(data_reduced_with_NA)
+
+# Check for NA values in each column and impute with median
+for (col in names(data_reduced_with_NA)) {
+  if (any(is.na(data_reduced_with_NA[[col]]))) {
+    median_value <- median(data_reduced_with_NA[[col]], na.rm = TRUE)
+    data_reduced_with_NA[[col]][is.na(data_reduced_with_NA[[col]])] <- median_value
+  }
+}
+# Rename the dataset
+data_fixed <- data_reduced_with_NA
+
+# Check if any NA values remain
+sum(is.na(data_fixed))
+
+summary(data_fixed)
+
+pca_result <- prcomp(data_fixed, scale. = TRUE)
+
+# Access the top-k principal components
+k <- 3  # Choose the number of components to retain
+selected_components <- pca_result$x[, 1:k]
+
+# Create a new dataset with the selected principal components
+new_features <- as.data.frame(selected_components)
+# Include the new features along with the target variable in a dataset
+model_data <- cbind(new_features, total_UPDRS = data_fixed$total_UPDRS)
+
+# Fit a linear regression model
+linear_model <- lm(total_UPDRS ~ ., data = model_data)
+
+# Print the summary of the linear model
+summary(linear_model)
+
+# Split data into training and validation sets
+set.seed(123)  # for reproducibility
+train_indices <- createDataPartition(model_data$total_UPDRS, p = 0.8, list = FALSE)
+train_data <- model_data[train_indices, ]
+validation_data <- model_data[-train_indices, ]
+
+# Separate features and target variable
+x_train <- train_data[, -4]  # Exclude total_UPDRS
+y_train <- train_data$total_UPDRS
+
+x_validation <- validation_data[, -4]
+y_validation <- validation_data$total_UPDRS
+
+# Linear Regression
+linear_model <- lm(total_UPDRS ~ ., data = train_data)
+linear_prediction <- predict(linear_model, newdata = x_validation)
+# evaluate performance
+linear_mse <- mean((linear_prediction - y_validation)^2)
+linear_mae <- mean(abs(linear_prediction - y_validation))
+linear_rsquared <- 1 - (sum((y_validation - linear_prediction)^2) / sum((y_validation - mean(y_validation))^2))
+
+print(paste("Linear Regression MSE:", linear_mse))
+print(paste("Linear Regression MAE:", linear_mae))
+print(paste("Linear Regression R-Squared:", linear_rsquared))
+
+# Decision Trees
+library(rpart)
+tree_model <- rpart(total_UPDRS ~ ., data = train_data)
+tree_prediction <- predict(tree_model, newdata = x_validation)
+# evaluate performance
+tree_mse <- mean((tree_prediction - y_validation)^2)
+tree_mae <- mean(abs(tree_prediction - y_validation))
+tree_r_squared <- 1 - (sum((y_validation - tree_prediction)^2) / sum((y_validation - mean(y_validation))^2))
+
+print(paste("Decision Tree MSE:", tree_mse))
+print(paste("Decision Tree MAE:", tree_mae))
+print(paste("Decision Tree R-squared:", tree_r_squared))
+
+# Support Vector Regression
+library(e1071)
+svr_model <- svm(total_UPDRS ~ ., data = train_data)
+svr_prediction <- predict(svr_model, newdata = x_validation)
+# Evaluate performance
+svr_mse <- mean((svr_prediction - y_validation)^2)
+svr_mae <- mean(abs(svr_prediction - y_validation))
+svr_r_squared <- 1 - (sum((y_validation - svr_prediction)^2) / sum((y_validation - mean(y_validation))^2))
+
+print(paste("SVR MSE:", svr_mse))
+print(paste("SVR MAE:", svr_mae))
+print(paste("SVR R-squared:", svr_r_squared))
+
+
+library(caret)
+
+# Specify the number of folds (e.g., 5-fold cross-validation)
+num_folds <- 5
+
+# Create folds
+folds <- createFolds(model_data$total_UPDRS, k = num_folds, list = TRUE, returnTrain = TRUE)
+
+# Define control parameters for cross-validation
+control <- trainControl(
+  method = "cv",
+  number = num_folds,
+  search = "grid",  # Set to "grid" to perform hyperparameter tuning
+  allowParallel = TRUE
+)
+
+# Linear Regression
+linear_model_cv <- train(
+  total_UPDRS ~ .,
+  data = model_data,
+  method = "lm",
+  trControl = control
+)
+
+# Decision Trees
+tree_model_cv <- train(
+  total_UPDRS ~ .,
+  data = model_data,
+  method = "rpart",
+  trControl = control
+)
+
+# Support Vector Regression
+svr_model_cv <- train(
+  total_UPDRS ~ .,
+  data = model_data,
+  method = "svmLinear",
+  trControl = control
+)
+
+# Print cross-validation results
+print(linear_model_cv)
+print(tree_model_cv)
+print(svr_model_cv)
+
+library(caret)
+
+# Define hyperparameter grid for Linear Regression
+param_grid_linear <- expand.grid(
+  alpha = seq(0, 1, by = 0.1),
+  lambda = 10^seq(-5, 5, by = 1)
+)
+
+# Specify the number of folds (e.g., 5-fold cross-validation)
+num_folds <- 5
+
+# Create folds
+folds_linear <- createFolds(model_data$total_UPDRS, k = num_folds, list = TRUE, returnTrain = TRUE)
+
+# Define control parameters for cross-validation
+control_linear <- trainControl(
+  method = "cv",
+  number = num_folds,
+  search = "grid",
+  allowParallel = TRUE
+)
+
+# Train Linear Regression with hyperparameter tuning
+linear_tuned <- train(
+  total_UPDRS ~ .,
+  data = model_data,
+  method = "glmnet",
+  trControl = control_linear,
+  tuneGrid = param_grid_linear
+)
+
+# Print the results
+print(linear_tuned)
+
+# Define hyperparameter grid for Decision Trees
+param_grid_tree <- expand.grid(
+  cp = seq(0.01, 0.1, by = 0.01)
+)
+
+# Specify the number of folds (e.g., 5-fold cross-validation)
+num_folds <- 5
+
+# Create folds
+folds_tree <- createFolds(model_data$total_UPDRS, k = num_folds, list = TRUE, returnTrain = TRUE)
+
+# Define control parameters for cross-validation
+control_tree <- trainControl(
+  method = "cv",
+  number = num_folds,
+  search = "grid",
+  allowParallel = TRUE
+)
+
+# Train Decision Trees with hyperparameter tuning
+tree_tuned <- train(
+  total_UPDRS ~ .,
+  data = model_data,
+  method = "rpart",
+  trControl = control_tree,
+  tuneGrid = param_grid_tree
+)
+
+# Print the results
+print(tree_tuned)
+
+# Define hyperparameter grid for SVR
+param_grid_svr <- expand.grid(
+  C = seq(0.1, 2, by = 0.1)
+)
+
+# Specify the number of folds (e.g., 5-fold cross-validation)
+num_folds <- 5
+
+# Create folds
+folds_svr <- createFolds(model_data$total_UPDRS, k = num_folds, list = TRUE, returnTrain = TRUE)
+
+# Define control parameters for cross-validation
+control_svr <- trainControl(
+  method = "cv",
+  number = num_folds,
+  search = "grid",
+  allowParallel = TRUE
+)
+
+# Train SVR with hyperparameter tuning
+svr_tuned <- train(
+  total_UPDRS ~ .,
+  data = model_data,
+  method = "svmLinear",
+  trControl = control_svr,
+  tuneGrid = param_grid_svr
+)
+
+# Print the results
+print(svr_tuned)
+
+# Combine individual models into a list
+individual_models <- list(
+  linear = linear_model,
+  tree = tree_model,
+  svr = svr_model
+)
+
+# Function to create an ensemble model
+create_ensemble <- function(models, data, method, num_models = 100) {
+  ensemble_models <- list()
+  
+  for (i in 1:num_models) {
+    bootstrap_indices <- sample(1:nrow(data), replace = TRUE)
+    bootstrap_data <- data[bootstrap_indices, ]
+    
+    # Train a model on the bootstrap sample
+    model <- train(total_UPDRS ~ ., data = bootstrap_data, method = method)
+    
+    ensemble_models[[i]] <- model
+  }
+  
+  return(ensemble_models)
+}
+
+ensemble_models <- create_ensemble(models = individual_models, data = train_data, method = "lm")
+
+
+# Evaluate ensemble performance on the validation set
+ensemble_predictions <- rowMeans(sapply(ensemble_models, function(model) predict(model, newdata = x_validation)))
+
+# Calculate metrics
+ensemble_mse <- mean((ensemble_predictions - y_validation)^2)
+ensemble_mae <- mean(abs(ensemble_predictions - y_validation))
+ensemble_r_squared <- 1 - (sum((y_validation - ensemble_predictions)^2) / sum((y_validation - mean(y_validation))^2))
+
+# Print ensemble performance metrics on the validation set
+cat("Ensemble MSE on Validation Set:", ensemble_mse, "\n")
+cat("Ensemble MAE on Validation Set:", ensemble_mae, "\n")
+cat("Ensemble R-Squared on Validation Set:", ensemble_r_squared, "\n")
+
